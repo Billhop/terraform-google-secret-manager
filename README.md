@@ -31,7 +31,7 @@ Functional examples are included in the [examples](./examples/) directory.
 |------|-------------|------|---------|:--------:|
 | add\_kms\_permissions | The list of the crypto keys to give secret manager access to | `list(string)` | `[]` | no |
 | add\_pubsub\_permissions | The list of the pubsub topics to give secret manager access to | `list(string)` | `[]` | no |
-| automatic\_replication | Automatic replication parameters that will be used for defined secrets. If not provided, the secret will be automatically replicated using Google-managed key without any restrictions. | `map(object({ kms_key_name = string }))` | `{}` | no |
+| automatic\_replication | Automatic replication parameters that will be used for defined secrets. If not provided, the secret will be automatically replicated using Google-managed key without any restrictions. | `map(object({ kms_key_name = optional(string) }))` | `{}` | no |
 | labels | labels to be added for the defined secrets | `map(map(string))` | `{}` | no |
 | project\_id | The project ID to manage the Secret Manager resources | `string` | n/a | yes |
 | secret\_accessors\_list | The list of the members to allow accessing secrets | `list(string)` | `[]` | no |
@@ -43,8 +43,8 @@ Functional examples are included in the [examples](./examples/) directory.
 
 | Name | Description |
 |------|-------------|
-| secret\_names | The name list of Secrets |
-| secret\_versions | The name list of Secret Versions |
+| secret\_names | The list of Secret names |
+| secret\_versions | The list of Secret versions |
 
 <!-- END OF PRE-COMMIT-TERRAFORM DOCS HOOK -->
 

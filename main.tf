@@ -14,92 +14,71 @@
  * limitations under the License.
  */
 
+/**********************************************************
+  Service Agent Permissions to KMS keys and Pub/Sub topics
+ **********************************************************/
 resource "google_project_service_identity" "secretmanager_identity" {
-  count    = length(var.add_kms_permissions) > 0 || length(var.add_pubsub_permissions) > 0 ? 1 : 0
+  count = length(var.add_kms_permissions) > 0 || length(var.add_pubsub_permissions) > 0 ? 1 : 0
+
   provider = google-beta
   project  = var.project_id
   service  = "secretmanager.googleapis.com"
 }
 
 resource "google_kms_crypto_key_iam_member" "sm_sa_encrypter_decrypter" {
-  count         = var.add_kms_permissions != null ? length(var.add_kms_permissions) : 0
+  count = length(var.add_kms_permissions)
+
   role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
   member        = "serviceAccount:${google_project_service_identity.secretmanager_identity[0].email}"
   crypto_key_id = var.add_kms_permissions[count.index]
 }
 
 resource "google_pubsub_topic_iam_member" "sm_sa_publisher" {
-  project = var.project_id
-  count   = var.add_pubsub_permissions != null ? length(var.add_pubsub_permissions) : 0
-  role    = "roles/pubsub.publisher"
-  member  = "serviceAccount:${google_project_service_identity.secretmanager_identity[0].email}"
-  topic   = var.add_pubsub_permissions[count.index]
+  count = length(var.add_pubsub_permissions)
+
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${google_project_service_identity.secretmanager_identity[0].email}"
+  topic  = var.add_pubsub_permissions[count.index]
 }
 
-resource "google_secret_manager_secret" "secrets" {
-  project   = var.project_id
-  for_each  = { for secret in var.secrets : secret.name => secret }
-  secret_id = each.value.name
-  replication {
-    dynamic "auto" {
-      for_each = lookup(var.user_managed_replication, each.key, null) == null ? [1] : []
-      content {
-        dynamic "customer_managed_encryption" {
-          for_each = try(var.automatic_replication[each.key].kms_key_name, null) != null ? [var.automatic_replication[each.key].kms_key_name] : []
-          content {
-            kms_key_name = customer_managed_encryption.value
-          }
-        }
-      }
-    }
-    dynamic "user_managed" {
-      for_each = lookup(var.user_managed_replication, each.key, null) != null ? [1] : []
-      content {
-        dynamic "replicas" {
-          for_each = lookup(var.user_managed_replication, each.key, [])
-          content {
-            location = replicas.value.location
-            dynamic "customer_managed_encryption" {
-              for_each = replicas.value.kms_key_name != null ? [replicas.value.kms_key_name] : []
-              content {
-                kms_key_name = customer_managed_encryption.value
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  labels = lookup(var.labels, each.key, null)
-  dynamic "topics" {
-    for_each = lookup(var.topics, each.key, [])
-    content {
-      name = topics.value.name
-    }
-  }
-  dynamic "rotation" {
-    for_each = (lookup(each.value, "next_rotation_time", null) != null || lookup(each.value, "rotation_period", null) != null) ? [1] : []
-    content {
-      next_rotation_time = lookup(each.value, "next_rotation_time", null)
-      rotation_period    = lookup(each.value, "rotation_period", null)
-    }
-  }
+/**********************************************************
+  Secret Manager Secret and Version
+ **********************************************************/
+
+module "secret" {
+  for_each = { for secret in var.secrets : secret.name => secret }
+
+  source = "./modules/simple-secret"
+
+  project_id               = var.project_id
+  name                     = each.value.name
+  secret_data              = each.value.secret_data
+  labels                   = lookup(var.labels, each.key, {})
+  topics                   = [for topic in lookup(var.topics, each.key, []) : topic.name]
+  user_managed_replication = lookup(var.user_managed_replication, each.key, [])
+  automatic_replication    = try(var.automatic_replication[each.key], {})
+
   depends_on = [
     google_kms_crypto_key_iam_member.sm_sa_encrypter_decrypter,
     google_pubsub_topic_iam_member.sm_sa_publisher
   ]
 }
 
-resource "google_secret_manager_secret_version" "secret-version" {
-  for_each    = { for secret in var.secrets : secret.name => secret if secret.create_version }
-  secret      = google_secret_manager_secret.secrets[each.value.name].id
-  secret_data = each.value.secret_data
-}
+/**********************************************************
+  IAM Permissions to the Secret
+ **********************************************************/
 
-resource "google_secret_manager_secret_iam_binding" "binding" {
-  project   = var.project_id
-  for_each  = { for secret in var.secrets : secret.name => secret if length(var.secret_accessors_list) > 0 }
-  secret_id = google_secret_manager_secret.secrets[each.value.name].id
-  role      = "roles/secretmanager.secretAccessor"
-  members   = var.secret_accessors_list
+module "secret_manager_iam" {
+  count = length(var.secret_accessors_list) > 0 ? 1 : 0
+
+  source  = "terraform-google-modules/iam/google//modules/secret_manager_iam"
+  version = "~> 7.7"
+
+  project = var.project_id
+  secrets = [for secret in module.secret : secret.id]
+  mode    = "additive"
+
+  bindings = {
+    "roles/secretmanager.secretAccessor" = var.secret_accessors_list
+  }
 }
